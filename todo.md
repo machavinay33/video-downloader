@@ -42,4 +42,4 @@
 
 ## Deployment
 - [x] Create checkpoint for deployment
-- [ ] Test on production environment
+- [x] Test on production environment
