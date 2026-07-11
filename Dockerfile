@@ -1,12 +1,13 @@
 FROM node:22-slim
 
-# Install Python, pip, ffmpeg, and yt-dlp
+# Install Python, pip, ffmpeg, and yt-dlp with nightly version
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     ffmpeg \
     curl \
     && pip3 install --break-system-packages --no-cache-dir --upgrade yt-dlp \
+    && yt-dlp --update-to nightly \
     && which yt-dlp \
     && yt-dlp --version \
     && rm -rf /var/lib/apt/lists/*
