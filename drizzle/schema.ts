@@ -25,4 +25,24 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-// TODO: Add your tables here
+/**
+ * Download history table to track user downloads
+ */
+export const downloadHistory = mysqlTable("downloadHistory", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id),
+  url: varchar("url", { length: 2048 }).notNull(),
+  platform: varchar("platform", { length: 64 }).notNull(),
+  title: text("title"),
+  filename: varchar("filename", { length: 512 }).notNull(),
+  downloadType: mysqlEnum("downloadType", ["video", "audio"]).default("video").notNull(),
+  quality: varchar("quality", { length: 64 }),
+  audioFormat: varchar("audioFormat", { length: 32 }),
+  fileSize: int("fileSize"),
+  duration: int("duration"),
+  thumbnail: varchar("thumbnail", { length: 2048 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type DownloadHistory = typeof downloadHistory.$inferSelect;
+export type InsertDownloadHistory = typeof downloadHistory.$inferInsert;
