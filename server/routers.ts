@@ -7,17 +7,21 @@ import { TRPCError } from "@trpc/server";
 import { fetchVideoMetadata, detectPlatform, downloadVideo, cleanupFile } from "./ytdlp";
 import { addDownloadHistory, getUserDownloadHistory } from "./db";
 import { registerDownload } from "./downloadHandler";
+import { checkPremium, incrementDownload, getDownloadStats, validatePremiumKey } from "./_core/premium";
 import fs from "fs";
 import os from "os";
 import path from "path";
 
+function getClientIp(req: { ip?: string; headers: { [key: string]: string | string[] | undefined } }): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string") return forwarded.split(",")[0].trim();
+  if (Array.isArray(forwarded)) return forwarded[0].trim();
+  return req.ip || "unknown";
+}
+
 export const appRouter = router({
   system: systemRouter,
   cookies: router({
-    /**
-     * Save Instagram cookies sent from the client browser.
-     * Expects raw Netscape cookies.txt content.
-     */
     setInstagram: publicProcedure
       .input(z.object({ content: z.string().min(10) }))
       .mutation(async ({ input }) => {
@@ -31,16 +35,26 @@ export const appRouter = router({
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true,
-      } as const;
+      return { success: true } as const;
     }),
   }),
-
+  premium: router({
+    check: publicProcedure.query(({ ctx }) => {
+      const ip = getClientIp(ctx.req);
+      return checkPremium(ip);
+    }),
+    stats: publicProcedure.query(({ ctx }) => {
+      const ip = getClientIp(ctx.req);
+      return getDownloadStats(ip);
+    }),
+    activate: publicProcedure
+      .input(z.object({ key: z.string().min(10) }))
+      .mutation(({ input }) => {
+        const valid = validatePremiumKey(input.key);
+        return { valid, message: valid ? "Premium activated!" : "Invalid license key." };
+      }),
+  }),
   downloader: router({
-    /**
-     * Fetch video metadata and available formats
-     */
     fetchMetadata: publicProcedure
       .input(z.object({ url: z.string().url() }))
       .query(async ({ input }) => {
@@ -57,9 +71,6 @@ export const appRouter = router({
         }
       }),
 
-    /**
-     * Download video or audio file — PUBLIC (no auth required for external hosting)
-     */
     download: publicProcedure
       .input(
         z.object({
@@ -70,7 +81,20 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
+        const ip = getClientIp(ctx.req);
+        const tier = checkPremium(ip);
         let filePath: string | null = null;
+
+        // Rate limit check
+        if (tier.tier === "free") {
+          const rateCheck = incrementDownload(ip);
+          if (!rateCheck.allowed) {
+            throw new TRPCError({
+              code: "TOO_MANY_REQUESTS",
+              message: `Daily limit reached. You've used ${tier.dailyLimit} downloads today. Upgrade to VideoFlow Premium for unlimited downloads.`,
+            });
+          }
+        }
 
         try {
           const metadata = await fetchVideoMetadata(input.url);
@@ -84,7 +108,6 @@ export const appRouter = router({
 
           filePath = downloadResult.filePath;
 
-          // Record history if user is authenticated, otherwise skip silently
           if (ctx.user?.id) {
             try {
               await addDownloadHistory({
@@ -112,12 +135,10 @@ export const appRouter = router({
             filename: downloadResult.filename,
             fileSize: downloadResult.fileSize,
             title: metadata.title,
+            remainingDownloads: tier.tier === "free" ? getDownloadStats(ip).remaining : null,
           };
         } catch (error) {
-          if (filePath) {
-            cleanupFile(filePath);
-          }
-
+          if (filePath) cleanupFile(filePath);
           console.error("Download error:", error);
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
@@ -126,9 +147,6 @@ export const appRouter = router({
         }
       }),
 
-    /**
-     * Get user's download history
-     */
     getHistory: protectedProcedure
       .input(z.object({ limit: z.number().default(50) }))
       .query(async ({ input, ctx }) => {
