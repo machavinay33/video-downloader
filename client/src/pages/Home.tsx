@@ -127,7 +127,7 @@ export default function Home() {
       toast.success(`Downloaded: ${result.filename}`);
       if (result.remainingDownloads != null && result.remainingDownloads <= 2) {
         toast.info(`${result.remainingDownloads} free downloads remaining today. Upgrade for unlimited!`, {
-          duration: 6000,
+          duration: 3000,
           action: {
             label: "Upgrade",
             onClick: () => setShowPremiumModal(true),
