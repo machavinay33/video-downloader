@@ -3,7 +3,6 @@ import { promisify } from "util";
 import path from "path";
 import fs from "fs";
 import os from "os";
-import https from "https";
 
 const execAsync = promisify(exec);
 
@@ -25,159 +24,35 @@ function isInstagramUrl(url: string): boolean {
   return lower.includes("instagram.com") || lower.includes("instagr.am");
 }
 
-/**
- * Build Instagram cookie file from environment variables or a file.
- * Auto-detects format: Netscape cookies.txt, JSON, key=value pairs, or plain sessionid value.
- */
-function writeInstagramCookieFile(): string | null {
-  const appCookiePath = path.join(os.tmpdir(), "instagram_cookies.txt");
-
-  // Check for cookies saved via the app cookie-paste feature
-  if (fs.existsSync(appCookiePath)) {
-    const stat = fs.statSync(appCookiePath);
+function getCookiePath(): string | null {
+  const cookiePath = path.join(os.tmpdir(), "instagram_cookies.txt");
+  if (fs.existsSync(cookiePath)) {
+    const stat = fs.statSync(cookiePath);
     if (Date.now() - stat.mtime.getTime() < 24 * 60 * 60 * 1000) {
-      const content = fs.readFileSync(appCookiePath, "utf-8").trim();
-      // Validate it actually contains sessionid
-      if (content.includes("sessionid")) {
-        // If it looks like a plain value (no tabs, no header line), rebuild it
-        if (!content.startsWith("#") && !content.includes("\t")) {
-          rebuildCookieFile(content, appCookiePath);
-        }
-        return appCookiePath;
-      }
+      return cookiePath;
     }
   }
 
-  // Option 1: Full cookies.txt as base64 env var
-  const fullCookiesB64 = process.env.INSTAGRAM_COOKIES_B64;
-  if (fullCookiesB64) {
-    try {
-      const decoded = Buffer.from(fullCookiesB64, "base64").toString("utf-8");
-      fs.writeFileSync(appCookiePath, decoded, "utf-8");
-      return appCookiePath;
-    } catch (e) {
-      console.warn("[Instagram] Failed to decode INSTAGRAM_COOKIES_B64:", e);
-    }
-  }
-
-  // Option 2: Individual cookie env vars
+  // Also check env var sessionid
   const sessionId = process.env.INSTAGRAM_SESSION_ID;
-  if (!sessionId) return null;
+  if (sessionId) {
+    const lines = [
+      "# Netscape HTTP Cookie File",
+      `.instagram.com\tTRUE\t/\tTRUE\t9999999999\tsessionid\t${sessionId}`,
+    ];
+    fs.writeFileSync(cookiePath, lines.join("\n"), "utf-8");
+    return cookiePath;
+  }
 
-  rebuildCookieFile(sessionId, appCookiePath);
-  return appCookiePath;
+  return null;
 }
 
-/**
- * Rebuild a proper Netscape cookies.txt from whatever the user pasted.
- * Handles: plain value, key=value, JSON, Netscape format.
- */
-function rebuildCookieFile(raw: string, appCookiePath: string): void {
-  let sessionId = "";
-  const extras: Record<string, string> = {};
-
-  const trimmed = raw.trim();
-
-  // Format 1: Already a Netscape cookies.txt
-  if (trimmed.startsWith("# Netscape") || trimmed.includes("\tinstagram.com\t")) {
-    fs.writeFileSync(appCookiePath, trimmed, "utf-8");
-    return;
-  }
-
-  // Format 2: JSON object with cookies
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      const cookies = Array.isArray(parsed) ? parsed : (parsed.cookies || parsed);
-      for (const c of cookies) {
-        if (c.name === "sessionid" || c.name === "sessionId") sessionId = c.value;
-        else if (c.name) extras[c.name] = c.value;
-      }
-    } catch {
-      // not valid JSON, fall through
-    }
-  }
-
-  // Format 3: key=value pairs (one per line or space-separated)
-  if (!sessionId) {
-    const pairs = trimmed.split(/\s*[\n,;]\s*|\s+/).filter(Boolean);
-    for (const pair of pairs) {
-      const clean = pair.trim();
-      if (!clean) continue;
-      if (clean.includes("=")) {
-        const [k, v] = clean.split("=");
-        const key = k.trim().toLowerCase();
-        const val = v.trim();
-        if (key === "sessionid" || key === "session_id") sessionId = val;
-        else if (["ds_user_id", "csrftoken", "mid", "ig_did", "rur", "shbid", "shbts"].includes(key)) {
-          extras[key] = val;
-        }
-      } else if (clean.length > 20 && !sessionId) {
-        // Likely just a raw sessionid value
-        sessionId = clean;
-      }
-    }
-  }
-
-  // Build proper Netscape cookies.txt
-  const lines = [
-    "# Netscape HTTP Cookie File",
-    "# http://curl.haxx.se/rfc/cookie_spec.html",
-    "# This is a generated file!  Do not edit.",
-    "",
-    `.instagram.com\tTRUE\t/\tTRUE\t9999999999\tsessionid\t${sessionId}`,
-  ];
-  if (extras.ds_user_id) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tds_user_id\t${extras.ds_user_id}`);
-  if (extras.csrftoken) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tcsrftoken\t${extras.csrftoken}`);
-  if (extras.mid) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tmid\t${extras.mid}`);
-  if (extras.ig_did) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tig_did\t${extras.ig_did}`);
-  if (extras.rur) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\trur\t${extras.rur}`);
-  if (extras.shbid) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tshbid\t${extras.shbid}`);
-  if (extras.shbts) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tshbts\t${extras.shbts}`);
-
-  fs.writeFileSync(appCookiePath, lines.join("\n"), "utf-8");
-}
-
-function instagramFlags(strategy: 1 | 2 | 3 = 1): string {
-  const cookiePath = writeInstagramCookieFile();
-
-  if (strategy === 1) {
-    let flags = `--impersonate chrome `;
-    flags += `--no-check-certificate `;
-    flags += `--extractor-args "instagram:api=graphql" `;
-    flags += `--geo-bypass `;
-    if (cookiePath) flags += `--cookies "${cookiePath}" `;
-    return flags;
-  }
-
-  if (strategy === 2) {
-    const ua =
-      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) " +
-      "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-      "Version/17.0 Mobile/15E148 Safari/604.1";
-    let flags =
-      `--user-agent "${ua}" ` +
-      `--add-header "Accept-Language:en-US,en;q=0.9" ` +
-      `--add-header "Referer:https://www.instagram.com/" ` +
-      `--no-check-certificate ` +
-      `--extractor-args "instagram:api=graphql" ` +
-      `--geo-bypass `;
-    if (cookiePath) flags += `--cookies "${cookiePath}" `;
-    return flags;
-  }
-
-  const ua2 =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-  let flags =
-    `--user-agent "${ua2}" ` +
-    `--add-header "Accept-Language:en-US,en;q=0.9" ` +
-    `--add-header "Referer:https://www.instagram.com/" ` +
-    `--add-header "Sec-Fetch-Dest:document" ` +
-    `--add-header "Sec-Fetch-Mode:navigate" ` +
-    `--add-header "Sec-Fetch-Site:none" ` +
-    `--no-check-certificate ` +
-    `--extractor-args "instagram:api=mobile" ` +
-    `--geo-bypass `;
+function instagramFlags(): string {
+  const cookiePath = getCookiePath();
+  let flags = `--no-check-certificate --geo-bypass `;
+  flags += `--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" `;
+  flags += `--add-header "Accept-Language:en-US,en;q=0.9" `;
+  flags += `--add-header "Referer:https://www.instagram.com/" `;
   if (cookiePath) flags += `--cookies "${cookiePath}" `;
   return flags;
 }
@@ -205,8 +80,7 @@ function parseYtDlpInfo(info: Record<string, unknown>): VideoMetadata {
   if (Array.isArray(info.formats)) {
     for (const fmt of info.formats as Record<string, unknown>[]) {
       if (fmt.vcodec && fmt.vcodec !== "none" && fmt.acodec && fmt.acodec !== "none") {
-        const resolution =
-          fmt.height && fmt.width ? `${fmt.height}p` : (fmt.format_note as string) || "Unknown";
+        const resolution = fmt.height && fmt.width ? `${fmt.height}p` : (fmt.format_note as string) || "Unknown";
         formats.push({
           formatId: fmt.format_id as string,
           ext: fmt.ext as string,
@@ -240,120 +114,6 @@ async function runYtDlp(url: string, flags: string): Promise<string> {
   return stdout;
 }
 
-/**
- * Strategy 4: Scrape Instagram's public embed page directly.
- * No cookies needed for public content. Works when yt-dlp is blocked.
- */
-async function scrapeInstagramEmbed(url: string): Promise<VideoMetadata> {
-  const shortcode = url.match(/(?:reel|p|tv|post)\/([A-Za-z0-9_-]+)/)?.[1];
-  if (!shortcode) throw new Error("Could not extract Instagram shortcode from URL");
-
-  const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/`;
-
-  return new Promise((resolve, reject) => {
-    const ua =
-      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
-
-    const req = https.get(
-      embedUrl,
-      {
-        headers: {
-          "User-Agent": ua,
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Referer": "https://www.instagram.com/",
-          "Sec-Fetch-Dest": "document",
-          "Sec-Fetch-Mode": "navigate",
-          "Sec-Fetch-Site": "same-origin",
-        },
-        timeout: 15000,
-      },
-      (res) => {
-        let body = "";
-        res.on("data", (d) => (body += d));
-        res.on("end", () => {
-          try {
-            // Look for og:video or video_url in meta tags
-            const videoMatch = body.match(/<meta[^>]+property="og:video"[^>]+content="([^"]+)"/i) ||
-                               body.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:video"/i) ||
-                               body.match(/"video_url":"([^"]+)"/);
-
-            const thumbMatch = body.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i) ||
-                                 body.match(/"thumbnail_src":"([^"]+)"/);
-
-            const titleMatch = body.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) ||
-                                 body.match(/"title":"([^"]+)"/);
-
-            if (videoMatch && videoMatch[1]) {
-              const videoUrl = videoMatch[1].replace(/\\u0026/g, "&");
-              const thumbnail = thumbMatch && thumbMatch[1] ? thumbMatch[1].replace(/\\u0026/g, "&") : "";
-              const title = titleMatch && titleMatch[1] ? titleMatch[1].replace(/\\u0026/g, "&") : "Instagram Video";
-
-              resolve({
-                id: shortcode,
-                title,
-                duration: 0,
-                thumbnail,
-                formats: [
-                  { formatId: "best", ext: "mp4", resolution: "Best Available" },
-                  { formatId: "hd", ext: "mp4", resolution: "HD (if available)" },
-                ],
-                audioFormats: ["mp3"],
-              });
-            } else {
-              reject(new Error("Could not find video URL in Instagram embed page"));
-            }
-          } catch (e) {
-            reject(e instanceof Error ? e : new Error(String(e)));
-          }
-        });
-      }
-    );
-
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy();
-      reject(new Error("Instagram embed request timed out"));
-    });
-  });
-}
-
-/**
- * Strategy 5: Use Instagram's GraphQL oEmbed endpoint (public, no cookies).
- */
-async function fetchInstagramOEmbed(url: string): Promise<VideoMetadata> {
-  const shortcode = url.match(/(?:reel|p|tv|post)\/([A-Za-z0-9_-]+)/)?.[1];
-  if (!shortcode) throw new Error("Could not extract Instagram shortcode");
-
-  return new Promise((resolve, reject) => {
-    const oembedUrl = `https://graph.facebook.com/v18.0/instagram_oembed?url=${encodeURIComponent(url)}&access_token=public`;
-
-    https.get(oembedUrl, { timeout: 15000 }, (res) => {
-      let body = "";
-      res.on("data", (d) => (body += d));
-      res.on("end", () => {
-        try {
-          const data = JSON.parse(body);
-          if (data.error) {
-            reject(new Error(data.error.message || "oEmbed error"));
-            return;
-          }
-          resolve({
-            id: shortcode,
-            title: data.title || data.author_name || "Instagram Video",
-            duration: 0,
-            thumbnail: data.thumbnail_url || "",
-            formats: [{ formatId: "best", ext: "mp4", resolution: "Best Available" }],
-            audioFormats: ["mp3"],
-          });
-        } catch (e) {
-          reject(e instanceof Error ? e : new Error(String(e)));
-        }
-      });
-    }).on("error", reject).on("timeout", function() { this.destroy(); reject(new Error("oEmbed timeout")); });
-  });
-}
-
 export async function fetchVideoMetadata(url: string): Promise<VideoMetadata> {
   if (!url || typeof url !== "string") throw new Error("Invalid URL provided");
 
@@ -362,60 +122,27 @@ export async function fetchVideoMetadata(url: string): Promise<VideoMetadata> {
     return parseYtDlpInfo(JSON.parse(stdout));
   }
 
-  // Try yt-dlp strategies first
-  const strategies: Array<1 | 2 | 3> = [1, 2, 3];
+  // Instagram: try with cookies, then without
+  const strategies = [true, false]; // with cookies, then without
   let lastError: Error | null = null;
 
-  for (const strategy of strategies) {
+  for (const useCookies of strategies) {
     try {
-      const flags = instagramFlags(strategy);
-      console.log(`[Instagram] Trying strategy ${strategy}...`);
+      const flags = useCookies ? instagramFlags() : "";
       const stdout = await runYtDlp(url, flags);
       return parseYtDlpInfo(JSON.parse(stdout));
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      console.warn(`[Instagram] Strategy ${strategy} failed:`, lastError.message);
     }
   }
 
-  // Fallback: Try public embed scraping (no cookies)
-  console.log("[Instagram] Trying public embed scraping...");
-  try {
-    const embedData = await scrapeInstagramEmbed(url);
-    return embedData;
-  } catch (embedErr) {
-    console.warn("[Instagram] Embed scraping failed:", embedErr instanceof Error ? embedErr.message : embedErr);
-  }
-
-  // Final fallback: oEmbed
-  console.log("[Instagram] Trying oEmbed...");
-  try {
-    const oembedData = await fetchInstagramOEmbed(url);
-    return oembedData;
-  } catch (oembedErr) {
-    console.warn("[Instagram] oEmbed failed:", oembedErr instanceof Error ? oembedErr.message : oembedErr);
-  }
-
-  // All strategies exhausted
-  const hasCookies = process.env.INSTAGRAM_SESSION_ID || process.env.INSTAGRAM_COOKIES_B64;
-
-  if (!hasCookies) {
-    throw new Error(
-      "Instagram is blocking this server. Here's how to fix it:\n\n" +
-      "1. Open Chrome on your computer\n" +
-      "2. Go to instagram.com and log in\n" +
-      "3. Press F12 → Application tab → Cookies → instagram.com\n" +
-      "4. Copy the 'sessionid' cookie value\n" +
-      "5. Open this app's settings (gear icon) and paste it into 'Instagram Session Cookie'\n\n" +
-      "Or use the cookie-paste button in the app to paste all your Instagram cookies at once."
-    );
-  }
-
   throw new Error(
-    `All download methods failed. Instagram may have blocked this server's IP or the content is private/age-restricted.\n\n` +
-    `Last error: ${lastError?.message}\n\n` +
-    `If the post works in your browser while logged in, the cookies may be expired. ` +
-    `Log into Instagram again and update the cookies in app settings.`
+    "Instagram is blocking this server. To download Instagram reels:\n\n" +
+    "1. Open Chrome on your computer, go to instagram.com, and log in\n" +
+    "2. Press F12 → Application → Cookies → instagram.com\n" +
+    "3. Copy the 'sessionid' cookie value\n" +
+    "4. Click 'Paste Instagram Session' in this app and paste it\n\n" +
+    "Last error: " + lastError?.message
   );
 }
 
@@ -426,7 +153,7 @@ export async function downloadVideo(
   const tempDir = os.tmpdir();
   const outputTemplate = path.join(tempDir, "yt-dlp-%(title)s.%(ext)s");
   const safeUrl = url.replace(/"/g, '\\"');
-  const extraFlags = isInstagramUrl(url) ? instagramFlags(1) : "";
+  const extraFlags = isInstagramUrl(url) ? instagramFlags() : "";
 
   try {
     let command = `yt-dlp --no-warnings ${extraFlags}-o "${outputTemplate}"`;
@@ -455,14 +182,6 @@ export async function downloadVideo(
     return { filePath, filename: downloadedFile, fileSize };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
-    if (isInstagramUrl(url)) {
-      const hasCookies = process.env.INSTAGRAM_SESSION_ID || process.env.INSTAGRAM_COOKIES_B64;
-      if (!hasCookies) {
-        throw new Error(
-          "Instagram is blocking this server. Use the cookie-paste button in the app to add your Instagram sessionid cookie, then try again."
-        );
-      }
-    }
     throw new Error(`Failed to download video: ${msg}`);
   }
 }
