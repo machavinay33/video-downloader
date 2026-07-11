@@ -1,3 +1,4 @@
+import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -28,21 +29,27 @@ interface VideoMetadata {
 }
 
 export default function Home() {
+  const { user, loading: authLoading } = useAuth();
   const [url, setUrl] = useState("");
   const [videoMetadata, setVideoMetadata] = useState<VideoMetadata | null>(null);
   const [selectedQuality, setSelectedQuality] = useState<string>("");
   const [selectedAudioFormat, setSelectedAudioFormat] = useState<string>("mp3");
   const [downloadType, setDownloadType] = useState<"video" | "audio">("video");
   const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadHistory, setDownloadHistory] = useState<any[]>([]);
   const [showPreview, setShowPreview] = useState(false);
+  const [sessionDownloads, setSessionDownloads] = useState<any[]>([]);
 
   const fetchMetadataQuery = trpc.downloader.fetchMetadata.useQuery(
     { url: url.trim() },
     { enabled: url.trim().length > 0, retry: false }
   );
   const downloadMutation = trpc.downloader.download.useMutation();
+  const historyQuery = trpc.downloader.getHistory.useQuery(
+    { limit: 20 },
+    { enabled: !!user }
+  );
 
-  // Update metadata when query completes
   useEffect(() => {
     if (fetchMetadataQuery.data) {
       setVideoMetadata(fetchMetadataQuery.data);
@@ -55,6 +62,12 @@ export default function Home() {
       setShowPreview(false);
     }
   }, [fetchMetadataQuery.data]);
+
+  useEffect(() => {
+    if (historyQuery.data) {
+      setDownloadHistory(historyQuery.data);
+    }
+  }, [historyQuery.data]);
 
   const handleDownload = async () => {
     if (!videoMetadata) {
@@ -71,7 +84,6 @@ export default function Home() {
         audioFormat: downloadType === "audio" ? (selectedAudioFormat as "mp3" | "m4a") : undefined,
       });
 
-      // Trigger download via token
       const downloadUrl = `/api/download/${result.downloadToken}`;
       const link = document.createElement("a");
       link.href = downloadUrl;
@@ -81,6 +93,23 @@ export default function Home() {
       document.body.removeChild(link);
 
       toast.success(`Downloaded: ${result.filename}`);
+
+      // Add to session downloads (for display without auth)
+      setSessionDownloads(prev => [{
+        id: Date.now().toString(),
+        title: result.title,
+        filename: result.filename,
+        platform: videoMetadata.platform,
+        thumbnail: videoMetadata.thumbnail,
+        downloadType: downloadType,
+        quality: downloadType === "video" ? selectedQuality : undefined,
+        createdAt: new Date().toISOString(),
+      }, ...prev]);
+
+      // Refresh history if authenticated
+      if (user) {
+        await historyQuery.refetch();
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Download failed");
     } finally {
@@ -92,12 +121,13 @@ export default function Home() {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
-
     if (hours > 0) {
       return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
     }
     return `${minutes}:${String(secs).padStart(2, "0")}`;
   };
+
+  const displayHistory = user ? downloadHistory : sessionDownloads;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
@@ -112,6 +142,18 @@ export default function Home() {
               <h1 className="text-xl font-bold text-slate-900">VideoFlow</h1>
               <p className="text-xs text-slate-500">Download videos effortlessly</p>
             </div>
+          </div>
+          <div>
+            {user ? (
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <p className="text-sm font-medium text-slate-900">{user.name}</p>
+                  <p className="text-xs text-slate-500">{user.email}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400">Free Downloads — No Sign-in Required</p>
+            )}
           </div>
         </div>
       </header>
@@ -142,11 +184,11 @@ export default function Home() {
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   className="text-base border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={authLoading}
                   aria-label="Video URL input"
                 />
               </div>
 
-              {/* Loading State */}
               {fetchMetadataQuery.isLoading && (
                 <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700 animate-in fade-in duration-300">
                   <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
@@ -154,7 +196,6 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Error State */}
               {fetchMetadataQuery.isError && (
                 <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 animate-in fade-in duration-300">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -271,7 +312,7 @@ export default function Home() {
                     </TabsContent>
                   </Tabs>
 
-                  {/* Download Button */}
+                  {/* Download Button — NO AUTH REQUIRED */}
                   <Button
                     onClick={handleDownload}
                     disabled={isDownloading}
@@ -296,11 +337,63 @@ export default function Home() {
           </div>
         )}
 
+        {/* Download History */}
+        {displayHistory.length > 0 && (
+          <div className="max-w-3xl mx-auto mt-16 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <h3 className="text-2xl font-bold text-slate-900 mb-6">Recent Downloads</h3>
+            <div className="grid gap-4">
+              {displayHistory.map((item, index) => (
+                <Card
+                  key={item.id}
+                  className="p-4 border-slate-200 hover:shadow-md hover:border-slate-300 transition-all duration-300 animate-in fade-in slide-in-from-left-4"
+                  style={{ animationDelay: `${index * 50}ms` }}
+                >
+                  <div className="flex items-start gap-4">
+                    {item.thumbnail && (
+                      <img
+                        src={item.thumbnail}
+                        alt={item.title}
+                        className="w-20 h-20 object-cover rounded-lg flex-shrink-0 shadow-sm hover:shadow-md transition-shadow duration-300"
+                      />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <h4 className="font-semibold text-slate-900 truncate">{item.title}</h4>
+                        {(() => {
+                          const platformInfo = getPlatformInfo(item.platform);
+                          const PlatformIcon = platformInfo.icon;
+                          return (
+                            <Badge variant="outline" className="flex-shrink-0 flex items-center gap-1">
+                              <PlatformIcon className="w-3 h-3" />
+                              {item.platform}
+                            </Badge>
+                          );
+                        })()}
+                      </div>
+                      <p className="text-sm text-slate-600 mb-2 truncate">{item.filename}</p>
+                      <div className="flex items-center gap-4 text-xs text-slate-500 flex-wrap">
+                        <span className="flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-green-600" />
+                          {item.downloadType === "audio" ? "Audio" : "Video"}
+                        </span>
+                        {item.quality && <span className="font-medium">{item.quality}</span>}
+                        <span>{new Date(item.createdAt).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Empty State */}
-        {!videoMetadata && !fetchMetadataQuery.isLoading && (
-          <div className="max-w-3xl mx-auto text-center py-12">
-            <ImageIcon className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-            <p className="text-slate-500 text-lg">No downloads yet. Start by pasting a video URL above!</p>
+        {displayHistory.length === 0 && !videoMetadata && (
+          <div className="max-w-3xl mx-auto text-center py-16">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-slate-100 rounded-full mb-4">
+              <ImageIcon className="w-8 h-8 text-slate-400" />
+            </div>
+            <p className="text-slate-600 text-lg">No downloads yet. Start by pasting a video URL above!</p>
           </div>
         )}
       </main>
