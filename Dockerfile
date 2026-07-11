@@ -1,11 +1,14 @@
 FROM node:22-slim
 
-# Install Python, pip, and yt-dlp
+# Install Python, pip, ffmpeg, and yt-dlp
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     ffmpeg \
-    && pip3 install --break-system-packages --no-cache-dir yt-dlp \
+    curl \
+    && pip3 install --break-system-packages --no-cache-dir --upgrade yt-dlp \
+    && which yt-dlp \
+    && yt-dlp --version \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
