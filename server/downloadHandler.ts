@@ -26,10 +26,10 @@ setInterval(() => {
  */
 export function registerDownload(filePath: string): string {
   const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-  // Token expires in 30 minutes
+  // Token expires in 15 minutes (optimized for mobile users)
   activeDownloads.set(token, {
     filePath,
-    expiresAt: Date.now() + 30 * 60 * 1000,
+    expiresAt: Date.now() + 15 * 60 * 1000,
   });
   return token;
 }
