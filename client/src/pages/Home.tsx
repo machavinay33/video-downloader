@@ -217,9 +217,9 @@ export default function Home() {
 
               {fetchMetadataQuery.isError && (
                 <div className="flex flex-col gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 animate-in fade-in duration-300">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    <span>{fetchMetadataQuery.error?.message || "Failed to fetch video metadata"}</span>
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span className="whitespace-pre-line">{fetchMetadataQuery.error?.message || "Failed to fetch video metadata"}</span>
                   </div>
                   {url.toLowerCase().includes("instagram") && (
                     <div className="flex items-center gap-2 pl-6">
@@ -230,7 +230,7 @@ export default function Home() {
                         className="text-xs border-red-300 text-red-700 hover:bg-red-100"
                       >
                         <Cookie className="w-3 h-3 mr-1" />
-                        Paste Instagram Cookies
+                        Paste Instagram Session
                       </Button>
                       {cookiesSaved && (
                         <span className="text-xs text-green-600 flex items-center gap-1">
