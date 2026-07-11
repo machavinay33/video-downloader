@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Download, Music, Play, Clock, Image as ImageIcon, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Loader2, Download, Music, Play, Clock, Image as ImageIcon, AlertCircle, CheckCircle2, Cookie, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { getPlatformInfo } from "@/lib/platformUtils";
@@ -39,12 +39,16 @@ export default function Home() {
   const [downloadHistory, setDownloadHistory] = useState<any[]>([]);
   const [showPreview, setShowPreview] = useState(false);
   const [sessionDownloads, setSessionDownloads] = useState<any[]>([]);
+  const [showCookieModal, setShowCookieModal] = useState(false);
+  const [cookieText, setCookieText] = useState("");
+  const [cookiesSaved, setCookiesSaved] = useState(false);
 
   const fetchMetadataQuery = trpc.downloader.fetchMetadata.useQuery(
     { url: url.trim() },
     { enabled: url.trim().length > 0, retry: false }
   );
   const downloadMutation = trpc.downloader.download.useMutation();
+  const saveCookiesMutation = trpc.cookies.setInstagram.useMutation();
   const historyQuery = trpc.downloader.getHistory.useQuery(
     { limit: 20 },
     { enabled: !!user }
@@ -114,6 +118,21 @@ export default function Home() {
       toast.error(error instanceof Error ? error.message : "Download failed");
     } finally {
       setIsDownloading(false);
+    }
+  };
+
+  const handleSaveCookies = async () => {
+    if (!cookieText.trim()) {
+      toast.error("Please paste your Instagram cookies");
+      return;
+    }
+    try {
+      await saveCookiesMutation.mutateAsync({ content: cookieText.trim() });
+      setCookiesSaved(true);
+      setShowCookieModal(false);
+      toast.success("Instagram cookies saved! Try the download again.");
+    } catch (err) {
+      toast.error("Failed to save cookies. Try again.");
     }
   };
 
@@ -197,9 +216,29 @@ export default function Home() {
               )}
 
               {fetchMetadataQuery.isError && (
-                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 animate-in fade-in duration-300">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  <span>{fetchMetadataQuery.error?.message || "Failed to fetch video metadata"}</span>
+                <div className="flex flex-col gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 animate-in fade-in duration-300">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <span>{fetchMetadataQuery.error?.message || "Failed to fetch video metadata"}</span>
+                  </div>
+                  {url.toLowerCase().includes("instagram") && (
+                    <div className="flex items-center gap-2 pl-6">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setShowCookieModal(true)}
+                        className="text-xs border-red-300 text-red-700 hover:bg-red-100"
+                      >
+                        <Cookie className="w-3 h-3 mr-1" />
+                        Paste Instagram Cookies
+                      </Button>
+                      {cookiesSaved && (
+                        <span className="text-xs text-green-600 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> Saved
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -397,6 +436,57 @@ export default function Home() {
           </div>
         )}
       </main>
+
+      {/* Instagram Cookie Paste Modal */}
+      {showCookieModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowCookieModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <Cookie className="w-5 h-5 text-orange-500" />
+                Paste Instagram Cookies
+              </h3>
+              <button onClick={() => setShowCookieModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-600">
+              Instagram blocks datacenter IPs. To download reels, paste your session cookies from Chrome DevTools.
+            </p>
+            <ol className="text-sm text-slate-600 space-y-1 list-decimal pl-5">
+              <li>On your computer, open Chrome and go to <strong>instagram.com</strong> — log in</li>
+              <li>Press <strong>F12</strong> → <strong>Application</strong> tab → <strong>Cookies</strong> → <strong>instagram.com</strong></li>
+              <li>Find <strong>sessionid</strong> — double-click and copy the value</li>
+              <li>Paste it below and click <strong>Save</strong></li>
+            </ol>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-slate-500">Session ID (or full cookies.txt content)</label>
+              <textarea
+                value={cookieText}
+                onChange={e => setCookieText(e.target.value)}
+                placeholder="sessionid=ABC123...xyz  (or paste full Netscape cookies.txt here)"
+                className="w-full h-32 text-xs font-mono p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+              />
+            </div>
+            <div className="flex gap-3">
+              <Button
+                onClick={handleSaveCookies}
+                disabled={saveCookiesMutation.isPending || !cookieText.trim()}
+                className="flex-1"
+              >
+                {saveCookiesMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 mr-2" /> Save Cookies
+                  </>
+                )}
+              </Button>
+              <Button variant="outline" onClick={() => setShowCookieModal(false)}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
