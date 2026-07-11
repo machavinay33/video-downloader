@@ -7,9 +7,25 @@ import { TRPCError } from "@trpc/server";
 import { fetchVideoMetadata, detectPlatform, downloadVideo, cleanupFile } from "./ytdlp";
 import { addDownloadHistory, getUserDownloadHistory } from "./db";
 import { registerDownload } from "./downloadHandler";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
 export const appRouter = router({
   system: systemRouter,
+  cookies: router({
+    /**
+     * Save Instagram cookies sent from the client browser.
+     * Expects raw Netscape cookies.txt content.
+     */
+    setInstagram: publicProcedure
+      .input(z.object({ content: z.string().min(10) }))
+      .mutation(async ({ input }) => {
+        const cookiePath = path.join(os.tmpdir(), "instagram_cookies.txt");
+        fs.writeFileSync(cookiePath, input.content, "utf-8");
+        return { saved: true, path: cookiePath };
+      }),
+  }),
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
