@@ -7,8 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
   Loader2, Download, Music, Play, Clock, Image as ImageIcon,
-  AlertCircle, CheckCircle2, Cookie, X, Crown, Zap, Infinity,
-  TrendingUp, Lock
+  AlertCircle, CheckCircle2, Cookie, X
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
@@ -32,11 +31,6 @@ interface VideoMetadata {
   audioFormats: string[];
 }
 
-function parseResolution(res: string): number {
-  const match = res.match(/(\d+)/);
-  return match ? parseInt(match[1]) : 0;
-}
-
 export default function Home() {
   const { user, loading: authLoading } = useAuth();
   const [url, setUrl] = useState("");
@@ -51,12 +45,6 @@ export default function Home() {
   const [showCookieModal, setShowCookieModal] = useState(false);
   const [cookieText, setCookieText] = useState("");
   const [cookiesSaved, setCookiesSaved] = useState(false);
-  const [showPremiumModal, setShowPremiumModal] = useState(false);
-  const [premiumKey, setPremiumKey] = useState("");
-
-  const premiumCheck = trpc.premium.check.useQuery(undefined, { refetchOnWindowFocus: false });
-  const premiumStats = trpc.premium.stats.useQuery(undefined, { refetchOnWindowFocus: false });
-  const activatePremium = trpc.premium.activate.useMutation();
 
   const fetchMetadataQuery = trpc.downloader.fetchMetadata.useQuery(
     { url: url.trim() },
@@ -69,19 +57,12 @@ export default function Home() {
     { enabled: !!user }
   );
 
-  const tier = premiumCheck.data;
-  const stats = premiumStats.data;
-  const isPremium = tier?.tier === "premium";
-
   useEffect(() => {
     if (fetchMetadataQuery.data) {
       setVideoMetadata(fetchMetadataQuery.data);
       setShowPreview(true);
-      // Auto-select best free quality for free tier
       if (fetchMetadataQuery.data.formats.length > 0) {
-        const bestFree = fetchMetadataQuery.data.formats.find(f => parseResolution(f.resolution) <= 720)
-          || fetchMetadataQuery.data.formats[0];
-        setSelectedQuality(bestFree.formatId);
+        setSelectedQuality(fetchMetadataQuery.data.formats[0].formatId);
       }
     } else {
       setVideoMetadata(null);
@@ -94,12 +75,6 @@ export default function Home() {
       setDownloadHistory(historyQuery.data);
     }
   }, [historyQuery.data]);
-
-  useEffect(() => {
-    if (downloadMutation.data?.remainingDownloads != null) {
-      premiumStats.refetch();
-    }
-  }, [downloadMutation.data]);
 
   const handleDownload = async () => {
     if (!videoMetadata) {
@@ -125,15 +100,6 @@ export default function Home() {
       document.body.removeChild(link);
 
       toast.success(`Downloaded: ${result.filename}`);
-      if (result.remainingDownloads != null && result.remainingDownloads <= 2) {
-        toast.info(`${result.remainingDownloads} free downloads remaining today. Upgrade for unlimited!`, {
-          duration: 3000,
-          action: {
-            label: "Upgrade",
-            onClick: () => setShowPremiumModal(true),
-          },
-        });
-      }
 
       setSessionDownloads(prev => [{
         id: Date.now().toString(),
@@ -150,18 +116,7 @@ export default function Home() {
         await historyQuery.refetch();
       }
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Download failed";
-      if (msg.includes("Daily limit reached")) {
-        toast.error(msg, {
-          duration: 8000,
-          action: {
-            label: "Upgrade to Premium",
-            onClick: () => setShowPremiumModal(true),
-          },
-        });
-      } else {
-        toast.error(msg);
-      }
+      toast.error(error instanceof Error ? error.message : "Download failed");
     } finally {
       setIsDownloading(false);
     }
@@ -169,33 +124,16 @@ export default function Home() {
 
   const handleSaveCookies = async () => {
     if (!cookieText.trim()) {
-      toast.error("Please paste your Instagram cookies");
+      toast.error("Please paste your Instagram session cookie");
       return;
     }
     try {
       await saveCookiesMutation.mutateAsync({ content: cookieText.trim() });
       setCookiesSaved(true);
       setShowCookieModal(false);
-      toast.success("Instagram cookies saved! Try the download again.");
+      toast.success("Instagram session saved! Try the download again.");
     } catch {
-      toast.error("Failed to save cookies. Try again.");
-    }
-  };
-
-  const handleActivatePremium = async () => {
-    if (!premiumKey.trim()) return;
-    try {
-      const result = await activatePremium.mutateAsync({ key: premiumKey.trim() });
-      if (result.valid) {
-        toast.success("Premium activated! Enjoy unlimited downloads.");
-        setShowPremiumModal(false);
-        premiumCheck.refetch();
-        premiumStats.refetch();
-      } else {
-        toast.error(result.message);
-      }
-    } catch {
-      toast.error("Activation failed. Try again.");
+      toast.error("Failed to save session. Try again.");
     }
   };
 
@@ -213,25 +151,8 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
-      {/* Premium Banner */}
-      {!isPremium && (
-        <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-center py-2 text-sm font-medium sticky top-0 z-50">
-          <span className="inline-flex items-center gap-2">
-            <Zap className="w-4 h-4" />
-            {stats ? (
-              <>Free tier: <strong>{stats.remaining}/{stats.limit}</strong> downloads today</>
-            ) : (
-              <>Free tier active — limited downloads per day</>
-            )}
-            <button onClick={() => setShowPremiumModal(true)} className="underline hover:no-underline ml-2 font-semibold">
-              Upgrade to Premium →
-            </button>
-          </span>
-        </div>
-      )}
-
       {/* Header */}
-      <header className="border-b border-slate-200 bg-white/80 backdrop-blur-sm sticky top-0 z-40 shadow-sm">
+      <header className="border-b border-slate-200 bg-white/80 backdrop-blur-sm sticky top-0 z-50 shadow-sm">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center shadow-md">
@@ -242,21 +163,16 @@ export default function Home() {
               <p className="text-xs text-slate-500">Download videos effortlessly</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            {isPremium && (
-              <Badge className="bg-gradient-to-r from-amber-500 to-orange-500 text-white border-0 flex items-center gap-1">
-                <Crown className="w-3 h-3" /> Premium
-              </Badge>
-            )}
+          <div>
             {user ? (
-              <div className="text-right">
-                <p className="text-sm font-medium text-slate-900">{user.name}</p>
-                <p className="text-xs text-slate-500">{user.email}</p>
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <p className="text-sm font-medium text-slate-900">{user.name}</p>
+                  <p className="text-xs text-slate-500">{user.email}</p>
+                </div>
               </div>
             ) : (
-              <Button size="sm" variant="ghost" onClick={() => setShowPremiumModal(true)} className="text-xs">
-                <Crown className="w-3 h-3 mr-1" /> Upgrade
-              </Button>
+              <p className="text-xs text-slate-400">Free Downloads — No Sign-in Required</p>
             )}
           </div>
         </div>
@@ -270,8 +186,7 @@ export default function Home() {
               Download Videos Effortlessly
             </h2>
             <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-              Extract videos and audio from Instagram, YouTube, TikTok, Twitter, and more.
-              {!isPremium && <span className="text-amber-600 font-medium"> Free tier: 5 downloads/day.</span>}
+              Extract videos and audio from Instagram, YouTube, TikTok, Twitter, and more. Choose your quality and format.
             </p>
           </div>
 
@@ -389,46 +304,30 @@ export default function Home() {
                       </TabsTrigger>
                     </TabsList>
 
-                    {/* Video Download Options */}
                     <TabsContent value="video" className="space-y-4 animate-in fade-in duration-200">
                       <div>
                         <label htmlFor="quality-select" className="block text-sm font-semibold text-slate-700 mb-2">
-                          Quality {isPremium ? "— Unlimited" : "— HD locked for free"}
+                          Quality
                         </label>
                         <Select value={selectedQuality} onValueChange={setSelectedQuality}>
                           <SelectTrigger id="quality-select" className="border-slate-300 focus:ring-2 focus:ring-blue-500">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {videoMetadata.formats.map((format) => {
-                              const res = parseResolution(format.resolution);
-                              const locked = !isPremium && res > 720;
-                              return (
-                                <SelectItem
-                                  key={format.formatId}
-                                  value={format.formatId}
-                                  disabled={locked}
-                                  className={locked ? "opacity-50" : ""}
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-medium">{format.resolution}</span>
-                                    {format.fps && <span className="text-xs text-slate-500">@ {format.fps}fps</span>}
-                                    {format.bitrate && <span className="text-xs text-slate-500">({format.bitrate})</span>}
-                                    {locked && (
-                                      <Badge variant="outline" className="text-xs ml-2 flex items-center gap-1 text-amber-600 border-amber-300">
-                                        <Lock className="w-2.5 h-2.5" /> Premium
-                                      </Badge>
-                                    )}
-                                  </div>
-                                </SelectItem>
-                              );
-                            })}
+                            {videoMetadata.formats.map((format) => (
+                              <SelectItem key={format.formatId} value={format.formatId}>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium">{format.resolution}</span>
+                                  {format.fps && <span className="text-xs text-slate-500">@ {format.fps}fps</span>}
+                                  {format.bitrate && <span className="text-xs text-slate-500">({format.bitrate})</span>}
+                                </div>
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>
                     </TabsContent>
 
-                    {/* Audio Download Options */}
                     <TabsContent value="audio" className="space-y-4 animate-in fade-in duration-200">
                       <div>
                         <label htmlFor="audio-format-select" className="block text-sm font-semibold text-slate-700 mb-2">
@@ -451,7 +350,6 @@ export default function Home() {
                     </TabsContent>
                   </Tabs>
 
-                  {/* Download Button */}
                   <Button
                     onClick={handleDownload}
                     disabled={isDownloading}
@@ -472,17 +370,6 @@ export default function Home() {
                   </Button>
                 </Card>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Ad Placeholder */}
-        {!isPremium && (
-          <div className="max-w-3xl mx-auto mt-12">
-            <div className="bg-slate-100 border-2 border-dashed border-slate-300 rounded-xl p-8 text-center">
-              <TrendingUp className="w-8 h-8 text-slate-400 mx-auto mb-3" />
-              <p className="text-sm text-slate-500 font-medium">Advertisement Space</p>
-              <p className="text-xs text-slate-400 mt-1">Upgrade to Premium to remove ads</p>
             </div>
           </div>
         )}
@@ -544,11 +431,6 @@ export default function Home() {
               <ImageIcon className="w-8 h-8 text-slate-400" />
             </div>
             <p className="text-slate-600 text-lg">No downloads yet. Start by pasting a video URL above!</p>
-            {!isPremium && (
-              <p className="text-sm text-slate-400 mt-2">
-                Free tier: 5 downloads per day. <button onClick={() => setShowPremiumModal(true)} className="text-blue-600 underline">Upgrade for unlimited</button>.
-              </p>
-            )}
           </div>
         )}
       </main>
@@ -576,11 +458,11 @@ export default function Home() {
               <li>Paste it below and click <strong>Save</strong></li>
             </ol>
             <div className="space-y-2">
-              <label className="text-xs font-semibold text-slate-500">Session ID (or full cookies.txt content)</label>
+              <label className="text-xs font-semibold text-slate-500">Session ID</label>
               <textarea
                 value={cookieText}
                 onChange={e => setCookieText(e.target.value)}
-                placeholder="sessionid=ABC123...xyz  (or paste full Netscape cookies.txt here)"
+                placeholder="Paste sessionid value or full cookies.txt here"
                 className="w-full h-32 text-xs font-mono p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
               />
             </div>
@@ -599,82 +481,6 @@ export default function Home() {
                 )}
               </Button>
               <Button variant="outline" onClick={() => setShowCookieModal(false)}>Cancel</Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Premium Upgrade Modal */}
-      {showPremiumModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowPremiumModal(false)}>
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-5" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                <Crown className="w-6 h-6 text-amber-500" />
-                VideoFlow Premium
-              </h3>
-              <button onClick={() => setShowPremiumModal(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex items-center gap-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
-                <Infinity className="w-5 h-5 text-amber-600 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Unlimited Downloads</p>
-                  <p className="text-xs text-slate-600">No daily limits, download as much as you want</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
-                <Zap className="w-5 h-5 text-blue-600 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">4K & HD Quality</p>
-                  <p className="text-xs text-slate-600">Unlock 1080p, 2K, and 4K video downloads</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 p-3 bg-green-50 rounded-lg border border-green-200">
-                <TrendingUp className="w-5 h-5 text-green-600 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Ad-Free Experience</p>
-                  <p className="text-xs text-slate-600">No ads, no interruptions, clean interface</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
-                <Download className="w-5 h-5 text-purple-600 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Priority Processing</p>
-                  <p className="text-xs text-slate-600">Faster downloads with dedicated bandwidth</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <p className="text-sm text-slate-600 text-center">
-                Enter your license key to activate Premium.
-              </p>
-              <Input
-                value={premiumKey}
-                onChange={e => setPremiumKey(e.target.value)}
-                placeholder="VF-PREMIUM-XXXX-XXXX-XXXX"
-                className="text-center font-mono text-sm"
-              />
-              <Button
-                onClick={handleActivatePremium}
-                disabled={activatePremium.isPending || premiumKey.trim().length < 10}
-                className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold h-12"
-              >
-                {activatePremium.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <>
-                    <Crown className="w-4 h-4 mr-2" /> Activate Premium
-                  </>
-                )}
-              </Button>
-              <p className="text-xs text-slate-400 text-center">
-                Contact us at premium@videoflow.app to get a license key
-              </p>
             </div>
           </div>
         </div>
