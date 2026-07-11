@@ -74,9 +74,19 @@ export async function fetchVideoMetadata(url: string): Promise<VideoMetadata> {
       throw new Error("Invalid URL provided");
     }
 
+    // For Instagram, add extra flags to handle authentication
+    let command = `yt-dlp -j --no-warnings`;
+    
+    if (url.toLowerCase().includes("instagram.com") || url.toLowerCase().includes("instagr.am")) {
+      // Add Instagram-specific flags
+      command += ` --extractor-args instagram:api_hash=0`;
+    }
+    
+    command += ` "${url.replace(/"/g, '\\"')}"`;
+
     // Run yt-dlp to get JSON info
     const { stdout } = await execAsync(
-      `yt-dlp -j --no-warnings "${url.replace(/"/g, '\\"')}"`,
+      command,
       { maxBuffer: 50 * 1024 * 1024, timeout: 30000 }
     );
 
