@@ -42,9 +42,9 @@ export const appRouter = router({
       }),
 
     /**
-     * Download video or audio file
+     * Download video or audio file — PUBLIC (no auth required for external hosting)
      */
-    download: protectedProcedure
+    download: publicProcedure
       .input(
         z.object({
           url: z.string().url(),
@@ -57,11 +57,9 @@ export const appRouter = router({
         let filePath: string | null = null;
 
         try {
-          // Fetch metadata for title and thumbnail
           const metadata = await fetchVideoMetadata(input.url);
           const platform = detectPlatform(input.url);
 
-          // Download the file
           const downloadResult = await downloadVideo(input.url, {
             quality: input.quality,
             audioOnly: input.audioOnly,
@@ -70,22 +68,27 @@ export const appRouter = router({
 
           filePath = downloadResult.filePath;
 
-          // Record in download history
-          await addDownloadHistory({
-            userId: ctx.user.id,
-            url: input.url,
-            platform,
-            title: metadata.title,
-            filename: downloadResult.filename,
-            downloadType: input.audioOnly ? "audio" : "video",
-            quality: input.quality,
-            audioFormat: input.audioFormat,
-            fileSize: downloadResult.fileSize,
-            duration: metadata.duration,
-            thumbnail: metadata.thumbnail,
-          });
+          // Record history if user is authenticated, otherwise skip silently
+          if (ctx.user?.id) {
+            try {
+              await addDownloadHistory({
+                userId: ctx.user.id,
+                url: input.url,
+                platform,
+                title: metadata.title,
+                filename: downloadResult.filename,
+                downloadType: input.audioOnly ? "audio" : "video",
+                quality: input.quality,
+                audioFormat: input.audioFormat,
+                fileSize: downloadResult.fileSize,
+                duration: metadata.duration,
+                thumbnail: metadata.thumbnail,
+              });
+            } catch (historyErr) {
+              console.warn("History save skipped:", historyErr);
+            }
+          }
 
-          // Register download token for streaming
           const downloadToken = registerDownload(downloadResult.filePath);
 
           return {
@@ -95,7 +98,6 @@ export const appRouter = router({
             title: metadata.title,
           };
         } catch (error) {
-          // Clean up file on error
           if (filePath) {
             cleanupFile(filePath);
           }
