@@ -39,18 +39,55 @@ function writeInstagramCookieFile(): string | null {
   return cookiePath;
 }
 
-function instagramFlags(): string {
+/**
+ * Build Instagram yt-dlp flags using multiple strategies.
+ * Strategy 1: --impersonate chrome (best - mimics real Chrome TLS + HTTP fingerprint)
+ * Strategy 2: Mobile iPhone UA + graphql API
+ * Strategy 3: Desktop Chrome UA + mobile API
+ */
+function instagramFlags(strategy: 1 | 2 | 3 = 1): string {
   const cookiePath = writeInstagramCookieFile();
-  const ua =
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) " +
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-    "Version/17.0 Mobile/15E148 Safari/604.1";
+
+  if (strategy === 1) {
+    // --impersonate chrome makes yt-dlp mimic Chrome's exact TLS/HTTP fingerprint
+    // This is the most effective against IP-based blocking
+    let flags = `--impersonate chrome `;
+    flags += `--no-check-certificate `;
+    flags += `--extractor-args "instagram:api=graphql" `;
+    flags += `--geo-bypass `;
+    if (cookiePath) flags += `--cookies "${cookiePath}" `;
+    return flags;
+  }
+
+  if (strategy === 2) {
+    const ua =
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) " +
+      "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
+      "Version/17.0 Mobile/15E148 Safari/604.1";
+    let flags =
+      `--user-agent "${ua}" ` +
+      `--add-header "Accept-Language:en-US,en;q=0.9" ` +
+      `--add-header "Referer:https://www.instagram.com/" ` +
+      `--no-check-certificate ` +
+      `--extractor-args "instagram:api=graphql" ` +
+      `--geo-bypass `;
+    if (cookiePath) flags += `--cookies "${cookiePath}" `;
+    return flags;
+  }
+
+  // strategy 3 - desktop chrome + mobile API
+  const ua2 =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
   let flags =
-    `--user-agent "${ua}" ` +
+    `--user-agent "${ua2}" ` +
     `--add-header "Accept-Language:en-US,en;q=0.9" ` +
     `--add-header "Referer:https://www.instagram.com/" ` +
+    `--add-header "Sec-Fetch-Dest:document" ` +
+    `--add-header "Sec-Fetch-Mode:navigate" ` +
+    `--add-header "Sec-Fetch-Site:none" ` +
     `--no-check-certificate ` +
-    `--extractor-args "instagram:api=graphql" `;
+    `--extractor-args "instagram:api=mobile" ` +
+    `--geo-bypass `;
   if (cookiePath) flags += `--cookies "${cookiePath}" `;
   return flags;
 }
@@ -104,54 +141,51 @@ function parseYtDlpInfo(info: Record<string, unknown>): VideoMetadata {
   };
 }
 
+async function runYtDlp(url: string, flags: string): Promise<string> {
+  const safeUrl = url.replace(/"/g, '\\"');
+  const { stdout } = await execAsync(
+    `yt-dlp -j --no-warnings ${flags}"${safeUrl}"`,
+    { maxBuffer: 50 * 1024 * 1024, timeout: 30000 }
+  );
+  return stdout;
+}
+
 export async function fetchVideoMetadata(url: string): Promise<VideoMetadata> {
   if (!url || typeof url !== "string") throw new Error("Invalid URL provided");
 
-  const safeUrl = url.replace(/"/g, '\\"');
-  const extraFlags = isInstagramUrl(url) ? instagramFlags() : "";
-
-  try {
-    const { stdout } = await execAsync(
-      `yt-dlp -j --no-warnings ${extraFlags}"${safeUrl}"`,
-      { maxBuffer: 50 * 1024 * 1024, timeout: 30000 }
-    );
+  if (!isInstagramUrl(url)) {
+    const stdout = await runYtDlp(url, "");
     return parseYtDlpInfo(JSON.parse(stdout));
-  } catch (primaryError) {
-    if (isInstagramUrl(url)) {
-      console.warn("Instagram primary fetch failed, retrying with mobile API...");
-      try {
-        const ua =
-          "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) " +
-          "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-          "Version/17.0 Mobile/15E148 Safari/604.1";
-        const cookiePath = writeInstagramCookieFile();
-        let fallbackFlags =
-          `--user-agent "${ua}" ` +
-          `--add-header "Accept-Language:en-US,en;q=0.9" ` +
-          `--add-header "Referer:https://www.instagram.com/" ` +
-          `--no-check-certificate ` +
-          `--extractor-args "instagram:api=mobile" `;
-        if (cookiePath) fallbackFlags += `--cookies "${cookiePath}" `;
-        const { stdout } = await execAsync(
-          `yt-dlp -j --no-warnings ${fallbackFlags}"${safeUrl}"`,
-          { maxBuffer: 50 * 1024 * 1024, timeout: 30000 }
-        );
-        return parseYtDlpInfo(JSON.parse(stdout));
-      } catch (fallbackError) {
-        const msg = fallbackError instanceof Error ? fallbackError.message : "Unknown error";
-        if (!process.env.INSTAGRAM_SESSION_ID) {
-          throw new Error(
-            "Instagram requires authentication to download this video. " +
-            "Set the INSTAGRAM_SESSION_ID environment variable to your Instagram session cookie value and restart the server."
-          );
-        }
-        throw new Error(`Failed to fetch Instagram video metadata: ${msg}`);
-      }
+  }
+
+  // Instagram: try strategies 1 -> 2 -> 3
+  const strategies: Array<1 | 2 | 3> = [1, 2, 3];
+  let lastError: Error | null = null;
+
+  for (const strategy of strategies) {
+    try {
+      const flags = instagramFlags(strategy);
+      console.log(`[Instagram] Trying strategy ${strategy}...`);
+      const stdout = await runYtDlp(url, flags);
+      return parseYtDlpInfo(JSON.parse(stdout));
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.warn(`[Instagram] Strategy ${strategy} failed:`, lastError.message);
     }
+  }
+
+  // All strategies failed
+  if (!process.env.INSTAGRAM_SESSION_ID) {
     throw new Error(
-      `Failed to fetch video metadata: ${primaryError instanceof Error ? primaryError.message : "Unknown error"}`
+      "Instagram is blocking this server. To download Instagram videos, set the INSTAGRAM_SESSION_ID environment variable " +
+      "with your Instagram sessionid cookie value, then redeploy. " +
+      "Get it from: Chrome DevTools > Application > Cookies > instagram.com > sessionid"
     );
   }
+
+  throw new Error(
+    `Failed to fetch Instagram video metadata. All strategies exhausted. Last error: ${lastError?.message}`
+  );
 }
 
 export async function downloadVideo(
@@ -161,7 +195,7 @@ export async function downloadVideo(
   const tempDir = os.tmpdir();
   const outputTemplate = path.join(tempDir, "yt-dlp-%(title)s.%(ext)s");
   const safeUrl = url.replace(/"/g, '\\"');
-  const extraFlags = isInstagramUrl(url) ? instagramFlags() : "";
+  const extraFlags = isInstagramUrl(url) ? instagramFlags(1) : "";
 
   try {
     let command = `yt-dlp --no-warnings ${extraFlags}-o "${outputTemplate}"`;
@@ -192,8 +226,8 @@ export async function downloadVideo(
     const msg = error instanceof Error ? error.message : "Unknown error";
     if (isInstagramUrl(url) && !process.env.INSTAGRAM_SESSION_ID) {
       throw new Error(
-        "Instagram requires authentication to download this video. " +
-        "Set the INSTAGRAM_SESSION_ID environment variable to your Instagram session cookie value and restart the server."
+        "Instagram is blocking this server. Set the INSTAGRAM_SESSION_ID environment variable " +
+        "with your Instagram sessionid cookie value, then redeploy."
       );
     }
     throw new Error(`Failed to download video: ${msg}`);
