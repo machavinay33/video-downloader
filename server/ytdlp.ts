@@ -74,21 +74,40 @@ export async function fetchVideoMetadata(url: string): Promise<VideoMetadata> {
       throw new Error("Invalid URL provided");
     }
 
-    // For Instagram, add extra flags to handle authentication
+    const isInstagram = url.toLowerCase().includes("instagram.com") || url.toLowerCase().includes("instagr.am");
+
+    // Build yt-dlp command
     let command = `yt-dlp -j --no-warnings`;
     
-    if (url.toLowerCase().includes("instagram.com") || url.toLowerCase().includes("instagr.am")) {
-      // Add Instagram-specific flags
-      command += ` --extractor-args instagram:api_hash=0`;
+    if (isInstagram) {
+      // Try multiple approaches for Instagram
+      command += ` --extractor-args instagram:web_api=true`;
     }
     
     command += ` "${url.replace(/"/g, '\\"')}"`;
 
     // Run yt-dlp to get JSON info
-    const { stdout } = await execAsync(
-      command,
-      { maxBuffer: 50 * 1024 * 1024, timeout: 30000 }
-    );
+    let stdout: string;
+    try {
+      const result = await execAsync(
+        command,
+        { maxBuffer: 50 * 1024 * 1024, timeout: 30000 }
+      );
+      stdout = result.stdout;
+    } catch (error: any) {
+      // If Instagram fails, provide helpful guidance
+      if (isInstagram) {
+        console.error("Instagram extraction failed:", error.message);
+        throw new Error(
+          "Instagram content requires authentication to access. This typically happens when:\n" +
+          "1. The post is private or restricted\n" +
+          "2. Instagram is blocking automated access\n" +
+          "3. The post has been deleted\n\n" +
+          "Try using a YouTube, TikTok, or other supported platform link instead."
+        );
+      }
+      throw error;
+    }
 
     const info = JSON.parse(stdout);
 
@@ -114,12 +133,10 @@ export async function fetchVideoMetadata(url: string): Promise<VideoMetadata> {
             bitrate: fmt.tbr ? `${Math.round(fmt.tbr)}k` : undefined,
           });
         }
-
       }
     }
 
     // Always include MP3 and M4A as audio format options
-    // yt-dlp can convert to these formats automatically
     audioFormats.add("mp3");
     audioFormats.add("m4a");
 
