@@ -41,5 +41,5 @@
 - [x] Add automatic cleanup of expired downloads
 
 ## Deployment
-- [ ] Create checkpoint for deployment
+- [x] Create checkpoint for deployment
 - [ ] Test on production environment
