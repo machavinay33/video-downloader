@@ -27,14 +27,24 @@ function isInstagramUrl(url: string): boolean {
 
 /**
  * Build Instagram cookie file from environment variables or a file.
+ * Auto-detects format: Netscape cookies.txt, JSON, key=value pairs, or plain sessionid value.
  */
 function writeInstagramCookieFile(): string | null {
-  // Check for existing file from the app cookie-paste feature
   const appCookiePath = path.join(os.tmpdir(), "instagram_cookies.txt");
+
+  // Check for cookies saved via the app cookie-paste feature
   if (fs.existsSync(appCookiePath)) {
     const stat = fs.statSync(appCookiePath);
     if (Date.now() - stat.mtime.getTime() < 24 * 60 * 60 * 1000) {
-      return appCookiePath;
+      const content = fs.readFileSync(appCookiePath, "utf-8").trim();
+      // Validate it actually contains sessionid
+      if (content.includes("sessionid")) {
+        // If it looks like a plain value (no tabs, no header line), rebuild it
+        if (!content.startsWith("#") && !content.includes("\t")) {
+          rebuildCookieFile(content, appCookiePath);
+        }
+        return appCookiePath;
+      }
     }
   }
 
@@ -50,29 +60,82 @@ function writeInstagramCookieFile(): string | null {
     }
   }
 
-  // Option 2: Individual cookie values
+  // Option 2: Individual cookie env vars
   const sessionId = process.env.INSTAGRAM_SESSION_ID;
   if (!sessionId) return null;
 
-  const dsUserId = process.env.INSTAGRAM_DS_USER_ID || "";
-  const csrfToken = process.env.INSTAGRAM_CSRFTOKEN || "";
-  const mid = process.env.INSTAGRAM_MID || "";
-  const igDid = process.env.INSTAGRAM_IG_DID || "";
-  const rur = process.env.INSTAGRAM_RUR || "";
+  rebuildCookieFile(sessionId, appCookiePath);
+  return appCookiePath;
+}
 
+/**
+ * Rebuild a proper Netscape cookies.txt from whatever the user pasted.
+ * Handles: plain value, key=value, JSON, Netscape format.
+ */
+function rebuildCookieFile(raw: string, appCookiePath: string): void {
+  let sessionId = "";
+  const extras: Record<string, string> = {};
+
+  const trimmed = raw.trim();
+
+  // Format 1: Already a Netscape cookies.txt
+  if (trimmed.startsWith("# Netscape") || trimmed.includes("\tinstagram.com\t")) {
+    fs.writeFileSync(appCookiePath, trimmed, "utf-8");
+    return;
+  }
+
+  // Format 2: JSON object with cookies
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const cookies = Array.isArray(parsed) ? parsed : (parsed.cookies || parsed);
+      for (const c of cookies) {
+        if (c.name === "sessionid" || c.name === "sessionId") sessionId = c.value;
+        else if (c.name) extras[c.name] = c.value;
+      }
+    } catch {
+      // not valid JSON, fall through
+    }
+  }
+
+  // Format 3: key=value pairs (one per line or space-separated)
+  if (!sessionId) {
+    const pairs = trimmed.split(/\s*[\n,;]\s*|\s+/).filter(Boolean);
+    for (const pair of pairs) {
+      const clean = pair.trim();
+      if (!clean) continue;
+      if (clean.includes("=")) {
+        const [k, v] = clean.split("=");
+        const key = k.trim().toLowerCase();
+        const val = v.trim();
+        if (key === "sessionid" || key === "session_id") sessionId = val;
+        else if (["ds_user_id", "csrftoken", "mid", "ig_did", "rur", "shbid", "shbts"].includes(key)) {
+          extras[key] = val;
+        }
+      } else if (clean.length > 20 && !sessionId) {
+        // Likely just a raw sessionid value
+        sessionId = clean;
+      }
+    }
+  }
+
+  // Build proper Netscape cookies.txt
   const lines = [
     "# Netscape HTTP Cookie File",
+    "# http://curl.haxx.se/rfc/cookie_spec.html",
+    "# This is a generated file!  Do not edit.",
     "",
     `.instagram.com\tTRUE\t/\tTRUE\t9999999999\tsessionid\t${sessionId}`,
   ];
-  if (dsUserId) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tds_user_id\t${dsUserId}`);
-  if (csrfToken) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tcsrftoken\t${csrfToken}`);
-  if (mid) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tmid\t${mid}`);
-  if (igDid) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tig_did\t${igDid}`);
-  if (rur) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\trur\t${rur}`);
+  if (extras.ds_user_id) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tds_user_id\t${extras.ds_user_id}`);
+  if (extras.csrftoken) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tcsrftoken\t${extras.csrftoken}`);
+  if (extras.mid) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tmid\t${extras.mid}`);
+  if (extras.ig_did) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tig_did\t${extras.ig_did}`);
+  if (extras.rur) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\trur\t${extras.rur}`);
+  if (extras.shbid) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tshbid\t${extras.shbid}`);
+  if (extras.shbts) lines.push(`.instagram.com\tTRUE\t/\tTRUE\t9999999999\tshbts\t${extras.shbts}`);
 
   fs.writeFileSync(appCookiePath, lines.join("\n"), "utf-8");
-  return appCookiePath;
 }
 
 function instagramFlags(strategy: 1 | 2 | 3 = 1): string {
