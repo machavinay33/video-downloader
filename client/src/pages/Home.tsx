@@ -13,6 +13,7 @@ import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { getPlatformInfo } from "@/lib/platformUtils";
 import { toast } from "sonner";
+import AdBanner from "@/components/AdBanner";
 
 interface VideoMetadata {
   id: string;
@@ -246,6 +247,11 @@ export default function Home() {
           </Card>
         </div>
 
+        {/* Ad Banner - Below URL input */}
+        <div className="max-w-3xl mx-auto mb-8">
+          <AdBanner slot="top" />
+        </div>
+
         {/* Video Preview & Download Section */}
         {videoMetadata && showPreview && (
           <div className="max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -374,6 +380,13 @@ export default function Home() {
           </div>
         )}
 
+        {/* Ad Banner - Between preview and history */}
+        {videoMetadata && showPreview && (
+          <div className="max-w-3xl mx-auto mt-8 mb-4">
+            <AdBanner slot="middle" />
+          </div>
+        )}
+
         {/* Download History */}
         {displayHistory.length > 0 && (
           <div className="max-w-3xl mx-auto mt-16 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -423,6 +436,11 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        {/* Ad Banner - Bottom of page */}
+        <div className="max-w-3xl mx-auto mt-8 mb-4">
+          <AdBanner slot="bottom" />
+        </div>
 
         {/* Empty State */}
         {displayHistory.length === 0 && !videoMetadata && (
